@@ -6,8 +6,7 @@
 
 #![allow(clippy::print_stdout, clippy::print_stderr)]
 
-use erc8004_search::{Filters, SearchClient, SearchRequest};
-use serde_json::json;
+use erc8004_search::{Filters, Protocol, SearchClient, SearchRequest};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -16,15 +15,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let client = SearchClient::builder().evm_signer(signer).build()?;
 
-    // Filtered search: chain + active + service type
+    // Filtered search: chain + active + service protocol
     let req = SearchRequest::new("MCP tool server")
         .limit(3)
         .min_score(0.3)
         .filters(
             Filters::new()
-                .eq("chainId", json!(8453))
-                .eq("active", json!(true))
-                .r#in("serviceName", vec![json!("MCP"), json!("REST")]),
+                .chain_id(8453)
+                .active(true)
+                .protocols([Protocol::Mcp]),
         );
 
     let resp = client.execute(req).await?;

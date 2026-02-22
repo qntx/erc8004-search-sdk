@@ -4,9 +4,116 @@
 //! [ERC-8004 Semantic Search Standard v1](https://github.com/qntx/erc8004-search-service/blob/main/docs/SEMANTIC_SEARCH_STANDARD_V1.md).
 
 use std::collections::HashMap;
+use std::fmt;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+
+/// Well-known service protocol names from the
+/// [ERC-8004 specification](https://eips.ethereum.org/EIPS/eip-8004).
+///
+/// These are the standard protocol identifiers agents register under.
+/// The `services[].name` field is open-ended, so agents *may* use
+/// custom names — use the low-level [`Filters::r#in`] method for those.
+///
+/// # Example
+///
+/// ```
+/// use erc8004_search::{Filters, Protocol};
+///
+/// let f = Filters::new().protocols([Protocol::Mcp, Protocol::A2a]);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Protocol {
+    /// Model Context Protocol.
+    Mcp,
+    /// Agent-to-Agent Protocol.
+    A2a,
+    /// Open Agent Service Framework.
+    Oasf,
+    /// Ethereum Name Service.
+    Ens,
+    /// Decentralized Identifier.
+    Did,
+    /// HTTP/HTTPS web endpoint.
+    Web,
+    /// Email-based agent endpoint.
+    Email,
+}
+
+impl Protocol {
+    /// All well-known protocol values.
+    pub const ALL: &[Self] = &[
+        Self::Mcp,
+        Self::A2a,
+        Self::Oasf,
+        Self::Ens,
+        Self::Did,
+        Self::Web,
+        Self::Email,
+    ];
+
+    /// The wire-format string used in ERC-8004 filter queries.
+    #[must_use]
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::Mcp => "MCP",
+            Self::A2a => "A2A",
+            Self::Oasf => "OASF",
+            Self::Ens => "ENS",
+            Self::Did => "DID",
+            Self::Web => "web",
+            Self::Email => "email",
+        }
+    }
+}
+
+impl fmt::Display for Protocol {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Standard trust models from the
+/// [ERC-8004 specification](https://eips.ethereum.org/EIPS/eip-8004).
+///
+/// # Example
+///
+/// ```
+/// use erc8004_search::{Filters, TrustModel};
+///
+/// let f = Filters::new().trust_models([TrustModel::Reputation]);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum TrustModel {
+    /// Client feedback / rating systems.
+    Reputation,
+    /// Stake-secured re-execution and validation.
+    CryptoEconomic,
+    /// Trusted execution environment attestation.
+    TeeAttestation,
+}
+
+impl TrustModel {
+    /// All well-known trust model values.
+    pub const ALL: &[Self] = &[Self::Reputation, Self::CryptoEconomic, Self::TeeAttestation];
+
+    /// The wire-format string used in ERC-8004 filter queries.
+    #[must_use]
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::Reputation => "reputation",
+            Self::CryptoEconomic => "crypto-economic",
+            Self::TeeAttestation => "tee-attestation",
+        }
+    }
+}
+
+impl fmt::Display for TrustModel {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
 
 /// `POST /api/v1/search` request body.
 ///
@@ -139,18 +246,20 @@ impl SearchRequest {
 
 /// Structured filter object (ERC-8004 standard).
 ///
-/// All conditions are AND-ed together across and within operators.
+/// All conditions are AND-ed together. Use the typed builder methods
+/// for standard fields; the low-level [`eq`](Self::eq) /
+/// [`r#in`](Self::r#in) methods are available for custom or future fields.
 ///
 /// # Example
 ///
 /// ```
-/// use erc8004_search::Filters;
-/// use serde_json::json;
+/// use erc8004_search::{Filters, Protocol, TrustModel};
 ///
 /// let filters = Filters::new()
-///     .eq("chainId", json!(8453))
-///     .eq("active", json!(true))
-///     .r#in("serviceName", vec![json!("MCP"), json!("A2A")]);
+///     .chain_id(8453)
+///     .active(true)
+///     .protocols([Protocol::Mcp, Protocol::A2a])
+///     .trust_models([TrustModel::Reputation]);
 /// ```
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -183,14 +292,111 @@ impl Filters {
         Self::default()
     }
 
-    /// Add an exact-match condition.
+    /// Filter by exact chain ID (EIP-155 network identifier).
+    ///
+    /// ```
+    /// # use erc8004_search::Filters;
+    /// let f = Filters::new().chain_id(8453); // Base mainnet
+    /// ```
+    #[must_use]
+    pub fn chain_id(self, id: i64) -> Self {
+        self.eq("chainId", Value::from(id))
+    }
+
+    /// Filter by multiple chain IDs (match any).
+    ///
+    /// ```
+    /// # use erc8004_search::Filters;
+    /// let f = Filters::new().chain_id_in([1, 8453, 42161]);
+    /// ```
+    #[must_use]
+    pub fn chain_id_in(self, ids: impl IntoIterator<Item = i64>) -> Self {
+        self.r#in("chainId", ids.into_iter().map(Value::from).collect())
+    }
+
+    /// Filter by agent active status.
+    ///
+    /// ```
+    /// # use erc8004_search::Filters;
+    /// let f = Filters::new().active(true);
+    /// ```
+    #[must_use]
+    pub fn active(self, is_active: bool) -> Self {
+        self.eq("active", Value::from(is_active))
+    }
+
+    /// Filter by x402 payment support.
+    ///
+    /// ```
+    /// # use erc8004_search::Filters;
+    /// let f = Filters::new().x402_support(true);
+    /// ```
+    #[must_use]
+    pub fn x402_support(self, supported: bool) -> Self {
+        self.eq("x402Support", Value::from(supported))
+    }
+
+    /// Filter by service protocols (match any).
+    ///
+    /// ```
+    /// use erc8004_search::{Filters, Protocol};
+    ///
+    /// let f = Filters::new().protocols([Protocol::Mcp, Protocol::A2a]);
+    /// ```
+    #[must_use]
+    pub fn protocols(self, protocols: impl IntoIterator<Item = Protocol>) -> Self {
+        self.r#in(
+            "serviceName",
+            protocols
+                .into_iter()
+                .map(|p| Value::from(p.as_str()))
+                .collect(),
+        )
+    }
+
+    /// Filter by trust models (match any).
+    ///
+    /// ```
+    /// use erc8004_search::{Filters, TrustModel};
+    ///
+    /// let f = Filters::new().trust_models([TrustModel::Reputation]);
+    /// ```
+    #[must_use]
+    pub fn trust_models(self, models: impl IntoIterator<Item = TrustModel>) -> Self {
+        self.r#in(
+            "supportedTrust",
+            models
+                .into_iter()
+                .map(|m| Value::from(m.as_str()))
+                .collect(),
+        )
+    }
+
+    /// Filter by exact agent ID (`"{chainId}:{tokenId}"` format).
+    ///
+    /// ```
+    /// # use erc8004_search::Filters;
+    /// let f = Filters::new().agent_id("8453:42");
+    /// ```
+    #[must_use]
+    pub fn agent_id(self, id: impl Into<String>) -> Self {
+        self.eq("agentId", Value::from(id.into()))
+    }
+
+    /// Filter by exact agent name.
+    #[must_use]
+    pub fn name_eq(self, name: impl Into<String>) -> Self {
+        self.eq("name", Value::from(name.into()))
+    }
+
+    /// Add an exact-match condition on an arbitrary field.
     #[must_use]
     pub fn eq(mut self, field: impl Into<String>, value: Value) -> Self {
         self.equals.insert(field.into(), value);
         self
     }
 
-    /// Add a match-any condition (OR logic within the field).
+    /// Add a match-any condition (OR within the field).
     #[must_use]
     pub fn r#in(mut self, field: impl Into<String>, values: Vec<Value>) -> Self {
         self.in_.insert(field.into(), values);
@@ -512,23 +718,36 @@ mod tests {
     }
 
     #[test]
-    fn filters_builder() {
+    fn filters_typed_api() {
         let f = Filters::new()
-            .eq("chainId", json!(8453))
-            .eq("active", json!(true))
-            .r#in("serviceName", vec![json!("MCP"), json!("A2A")])
-            .not_in("chainId", vec![json!(1)])
+            .chain_id(8453)
+            .active(true)
+            .x402_support(true)
+            .protocols([Protocol::Mcp, Protocol::A2a])
+            .trust_models([TrustModel::Reputation]);
+        assert_eq!(f.count(), 5);
+        assert!(!f.is_empty());
+        assert_eq!(f.equals["chainId"], json!(8453));
+        assert_eq!(f.equals["active"], json!(true));
+        assert_eq!(f.equals["x402Support"], json!(true));
+        assert_eq!(f.in_["serviceName"], vec![json!("MCP"), json!("A2A")]);
+        assert_eq!(f.in_["supportedTrust"], vec![json!("reputation")]);
+    }
+
+    #[test]
+    fn filters_low_level_escape_hatch() {
+        let f = Filters::new()
+            .eq("customField", json!("val"))
+            .r#in("chainId", vec![json!(1), json!(2)])
+            .not_in("chainId", vec![json!(99)])
             .exists("image")
             .not_exists("deprecated");
-        assert_eq!(f.count(), 6);
-        assert!(!f.is_empty());
+        assert_eq!(f.count(), 5);
     }
 
     #[test]
     fn filters_serialize_roundtrip() {
-        let original = Filters::new()
-            .eq("active", json!(true))
-            .r#in("chainId", vec![json!(8453), json!(84532)]);
+        let original = Filters::new().active(true).chain_id_in([8453, 84532]);
         let json_str = serde_json::to_string(&original).expect("serialize");
         let parsed: Filters = serde_json::from_str(&json_str).expect("deserialize");
         assert_eq!(parsed.equals.len(), 1);

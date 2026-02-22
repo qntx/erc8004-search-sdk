@@ -2,7 +2,7 @@
 
 # erc8004-search
 
-**Rust SDK for the [ERC-8004 Semantic Search Standard](https://github.com/qntx/erc8004-search-service)**
+**Rust SDK for the [ERC-8004 Semantic Search](https://github.com/qntx/8004)**
 
 [![Crates.io](https://img.shields.io/crates/v/erc8004-search.svg)](https://crates.io/crates/erc8004-search)
 [![Documentation](https://docs.rs/erc8004-search/badge.svg)](https://docs.rs/erc8004-search)
@@ -25,13 +25,6 @@ Discover on-chain AI agents through semantic search — with zero configuration 
 
 Add to your `Cargo.toml`:
 
-```toml
-[dependencies]
-erc8004-search = "0.2"
-```
-
-Or via the CLI:
-
 ```sh
 cargo add erc8004-search
 ```
@@ -40,10 +33,14 @@ cargo add erc8004-search
 
 ```rust
 use erc8004_search::SearchClient;
+use alloy_signer_local::PrivateKeySigner;
 
 #[tokio::main]
 async fn main() -> erc8004_search::Result<()> {
-    let client = SearchClient::new();
+    let signer: PrivateKeySigner = std::env::var("PRIVATE_KEY")?.parse()?;
+    let client = SearchClient::builder()
+        .evm_signer(signer)
+        .build()?;
 
     let response = client.search("DeFi lending agent").await?;
     for item in &response.results {
@@ -51,23 +48,6 @@ async fn main() -> erc8004_search::Result<()> {
     }
     Ok(())
 }
-```
-
-## x402 Payment
-
-When the service requires payment, attach an EVM signer to handle
-`402 Payment Required` responses automatically:
-
-```rust
-use erc8004_search::SearchClient;
-use alloy_signer_local::PrivateKeySigner;
-
-let signer: PrivateKeySigner = "0xYOUR_PRIVATE_KEY".parse()?;
-let client = SearchClient::builder()
-    .evm_signer(signer)
-    .build()?;
-
-let resp = client.search("MCP tool server").await?;
 ```
 
 For custom endpoints, chain `.base_url("https://...")` on the builder.
@@ -79,8 +59,7 @@ For custom endpoints, chain `.base_url("https://...")` on the builder.
 Use the structured `Filters` builder to narrow results by on-chain metadata:
 
 ```rust
-use erc8004_search::{SearchClient, SearchRequest, Filters};
-use serde_json::json;
+use erc8004_search::{SearchClient, SearchRequest, Filters, Protocol};
 
 let client = SearchClient::new();
 
@@ -89,9 +68,9 @@ let request = SearchRequest::new("MCP tool server")
     .min_score(0.5)
     .filters(
         Filters::new()
-            .eq("chainId", json!(8453))
-            .eq("active", json!(true))
-            .r#in("serviceName", vec![json!("MCP"), json!("A2A")])
+            .chain_id(8453)
+            .active(true)
+            .protocols([Protocol::Mcp, Protocol::A2a])
     );
 
 let resp = client.execute(request).await?;
@@ -130,9 +109,9 @@ let client = SearchClient::builder()
 
 ## Feature Flags
 
-| Feature  | Default | Description                                |
-|----------|---------|--------------------------------------------|
-| `evm`    | **yes** | EVM chain payment support via `r402-evm`   |
+| Feature  | Default | Description                                 |
+|----------|---------|---------------------------------------------|
+| `evm`    | **yes** | EVM chain payment support via `r402-evm`    |
 | `solana` | no      | Solana chain payment support via `r402-svm` |
 
 Enable Solana support:
@@ -157,29 +136,13 @@ PRIVATE_KEY="0x..." cargo run --example search_filters
 PRIVATE_KEY="0x..." SEARCH_URL="https://your-server.com" cargo run --example search
 ```
 
-## API Reference
-
-Full documentation is available on [docs.rs](https://docs.rs/erc8004-search).
-
-| Type / Constant         | Description                                      |
-|-------------------------|--------------------------------------------------|
-| `DEFAULT_BASE_URL`      | Built-in QNTX endpoint (`https://search.qntx.fun`) |
-| `SearchClient`          | Main HTTP client with search, health, capabilities |
-| `SearchClientBuilder`   | Fluent builder for payment and HTTP configuration  |
-| `SearchRequest`         | Query builder with filters, pagination, limits     |
-| `Filters`               | Structured metadata filter (equals, in, notIn, …)  |
-| `SearchResponse`        | Typed search response with results & pagination    |
-| `Error`                 | Unified error type covering all failure modes      |
-
-## Contributing
-
-Contributions are welcome! Please open an issue or submit a pull request.
-
 ## License
 
-Licensed under either of
+Licensed under either of:
 
-- [Apache License, Version 2.0](LICENSE-APACHE)
-- [MIT License](LICENSE-MIT)
+- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE) or <https://www.apache.org/licenses/LICENSE-2.0>)
+- MIT License ([LICENSE-MIT](LICENSE-MIT) or <https://opensource.org/licenses/MIT>)
 
 at your option.
+
+Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in this project shall be dual-licensed as above, without any additional terms or conditions.

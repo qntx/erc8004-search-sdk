@@ -15,15 +15,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let signer: alloy_signer_local::PrivateKeySigner =
         std::env::var("PRIVATE_KEY").expect("PRIVATE_KEY").parse()?;
 
-    let client = SearchClient::builder()
-        .evm_signer(signer)
-        .build()?;
+    let client = SearchClient::builder().evm_signer(signer).build()?;
 
     let resp = client.search("DeFi lending").await?;
 
-    println!("{} results (request {})\n", resp.results.len(), resp.request_id);
+    println!(
+        "{} results (request {})\n",
+        resp.results.len(),
+        resp.request_id
+    );
     for r in &resp.results {
-        println!("  #{:<2} {:.3}  {}  — {}", r.rank, r.score, r.name, r.description);
+        println!(
+            "  #{:<2} {:.3}  {}  — {}",
+            r.rank, r.score, r.name, r.description
+        );
     }
 
     Ok(())

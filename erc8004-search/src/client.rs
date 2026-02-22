@@ -1,4 +1,4 @@
-﻿//! HTTP client for the ERC-8004 Semantic Search Service.
+//! HTTP client for the ERC-8004 Semantic Search Service.
 //!
 //! [`SearchClient`] wraps `reqwest` with automatic x402 payment handling
 //! via [`r402_http::client::X402Client`] middleware.
@@ -16,37 +16,41 @@ use crate::types::{CapabilitiesResponse, HealthResponse, SearchRequest, SearchRe
 
 /// Built-in default base URL for the QNTX-hosted ERC-8004 search service.
 ///
-/// Used by [`SearchClient::new`] and [`SearchClient::builder`] unless
-/// overridden with [`SearchClientBuilder::base_url`].
+/// Used by [`SearchClient::builder`] unless overridden with
+/// [`SearchClientBuilder::base_url`].
 pub const DEFAULT_BASE_URL: &str = "https://search.qntx.fun";
 
 /// HTTP client for the ERC-8004 Semantic Search Service.
 ///
 /// Handles request construction, JSON serialization, error mapping,
-/// and optional x402 payment middleware.
+/// and x402 payment middleware.
 ///
-/// # Construction
-///
-/// | Method                      | Use case                                  |
-/// |-----------------------------|-------------------------------------------|
-/// | [`SearchClient::new`]       | Quick start, no payment, default endpoint |
-/// | [`SearchClient::builder`]   | Payment, custom URL, timeouts, etc.       |
+/// Construct via [`SearchClient::builder`], which defaults to the
+/// QNTX-hosted endpoint ([`DEFAULT_BASE_URL`]).
 ///
 /// # Example
 ///
 /// ```rust,ignore
-/// use erc8004_search::{SearchClient, SearchRequest, Filters};
-/// use serde_json::json;
+/// use erc8004_search::{SearchClient, SearchRequest, Filters, Protocol};
+/// use alloy_signer_local::PrivateKeySigner;
 ///
-/// // Zero-config — uses the built-in QNTX endpoint.
-/// let client = SearchClient::new();
+/// let signer: PrivateKeySigner = "0x...".parse()?;
+/// let client = SearchClient::builder()
+///     .evm_signer(signer)
+///     .build()?;
+///
+/// // Simple query.
 /// let resp = client.search("DeFi lending").await?;
 ///
-/// // Fully configured via builder.
+/// // Fully configured request.
 /// let req = SearchRequest::new("MCP tool server")
 ///     .limit(5)
 ///     .min_score(0.5)
-///     .filters(Filters::new().eq("chainId", json!(8453)));
+///     .filters(
+///         Filters::new()
+///             .chain_id(8453)
+///             .protocols([Protocol::Mcp]),
+///     );
 /// let resp = client.execute(req).await?;
 /// ```
 #[derive(Debug, Clone)]
@@ -56,18 +60,6 @@ pub struct SearchClient {
 }
 
 impl SearchClient {
-    /// Create a client targeting the built-in QNTX endpoint
-    /// ([`DEFAULT_BASE_URL`]) without x402 payment middleware.
-    ///
-    /// This is the fastest way to start querying.
-    /// For payment or custom endpoints, use [`SearchClient::builder`].
-    #[must_use]
-    pub fn new() -> Self {
-        SearchClientBuilder::default()
-            .build()
-            .expect("built-in DEFAULT_BASE_URL is always valid")
-    }
-
     /// Create a [`SearchClientBuilder`] pre-configured with the built-in
     /// QNTX endpoint ([`DEFAULT_BASE_URL`]).
     ///
@@ -213,6 +205,11 @@ impl SearchClient {
 /// Builder for constructing a [`SearchClient`] with x402 payment and custom
 /// HTTP settings.
 ///
+/// The type parameter `S` is the [`PaymentSelector`](r402::scheme::PaymentSelector)
+/// strategy used when multiple payment options are available. It defaults to
+/// [`FirstMatch`](r402::scheme::FirstMatch), which picks the first compatible
+/// scheme. Override via [`payment_selector`](Self::payment_selector).
+///
 /// Defaults to [`DEFAULT_BASE_URL`]. Override with [`base_url`](Self::base_url).
 ///
 /// # Example
@@ -223,23 +220,25 @@ impl SearchClient {
 ///
 /// let signer: PrivateKeySigner = "0x...".parse()?;
 ///
-/// // Default endpoint + payment.
+/// // Default endpoint + payment (FirstMatch selector).
 /// let client = SearchClient::builder()
 ///     .evm_signer(signer)
 ///     .build()?;
 ///
-/// // Custom endpoint + payment + timeout.
+/// // Prefer Base chain, custom timeout.
+/// use r402::scheme::{PreferChain, ChainIdPattern};
+///
 /// let client = SearchClient::builder()
-///     .base_url("https://custom.example.com")
 ///     .evm_signer(signer)
+///     .payment_selector(PreferChain::new([ChainIdPattern::exact(8453)]))
 ///     .timeout(std::time::Duration::from_secs(60))
 ///     .build()?;
 /// ```
 #[allow(missing_debug_implementations)]
-pub struct SearchClientBuilder {
+pub struct SearchClientBuilder<S = r402::scheme::FirstMatch> {
     base_url: String,
     reqwest_builder: reqwest::ClientBuilder,
-    x402: r402_http::client::X402Client<r402::scheme::FirstMatch>,
+    x402: r402_http::client::X402Client<S>,
     has_payment: bool,
 }
 
@@ -256,7 +255,7 @@ impl Default for SearchClientBuilder {
     }
 }
 
-impl SearchClientBuilder {
+impl<S> SearchClientBuilder<S> {
     /// Override the base URL (default: [`DEFAULT_BASE_URL`]).
     ///
     /// Only needed when running your own ERC-8004 service instance.
@@ -308,12 +307,77 @@ impl SearchClientBuilder {
     ///
     /// Use this for Solana or other non-EVM payment schemes.
     #[must_use]
-    pub fn register_scheme<S>(mut self, scheme: S) -> Self
+    pub fn register_scheme<T>(mut self, scheme: T) -> Self
     where
-        S: r402::scheme::SchemeClient + 'static,
+        T: r402::scheme::SchemeClient + 'static,
     {
         self.x402 = self.x402.register(scheme);
         self.has_payment = true;
+        self
+    }
+
+    /// Set the payment selection strategy.
+    ///
+    /// By default, [`FirstMatch`](r402::scheme::FirstMatch) is used, which
+    /// selects the first compatible payment scheme.
+    ///
+    /// # Available selectors
+    ///
+    /// - [`FirstMatch`](r402::scheme::FirstMatch) — first compatible scheme (default)
+    /// - [`PreferChain`](r402::scheme::PreferChain) — prefer specific chains in priority order
+    /// - [`MaxAmount`](r402::scheme::MaxAmount) — reject payments above a ceiling
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use r402::scheme::{PreferChain, ChainIdPattern};
+    ///
+    /// let client = SearchClient::builder()
+    ///     .evm_signer(signer)
+    ///     .payment_selector(PreferChain::new([ChainIdPattern::exact(8453)]))
+    ///     .build()?;
+    /// ```
+    pub fn payment_selector<P>(self, selector: P) -> SearchClientBuilder<P>
+    where
+        P: r402::scheme::PaymentSelector + 'static,
+    {
+        SearchClientBuilder {
+            base_url: self.base_url,
+            reqwest_builder: self.reqwest_builder,
+            x402: self.x402.with_selector(selector),
+            has_payment: self.has_payment,
+        }
+    }
+
+    /// Add a payment policy to the filtering pipeline.
+    ///
+    /// Policies are applied in registration order *before* the selector picks
+    /// the final candidate. Use policies to restrict which networks, schemes,
+    /// or amounts are acceptable.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use r402::scheme::{NetworkPolicy, ChainIdPattern};
+    ///
+    /// let client = SearchClient::builder()
+    ///     .evm_signer(signer)
+    ///     .payment_policy(NetworkPolicy::new([ChainIdPattern::exact(8453)]))
+    ///     .build()?;
+    /// ```
+    #[must_use]
+    pub fn payment_policy(mut self, policy: impl r402::scheme::PaymentPolicy + 'static) -> Self {
+        self.x402 = self.x402.with_policy(policy);
+        self
+    }
+
+    /// Add a lifecycle hook for payment creation events.
+    ///
+    /// Hooks allow intercepting the payment pipeline for logging, custom
+    /// validation, or error recovery.
+    #[must_use]
+    pub fn payment_hook(mut self, hook: impl r402_http::client::ClientHooks + 'static) -> Self {
+        self.x402 = self.x402.with_hook(hook);
         self
     }
 
@@ -330,7 +394,12 @@ impl SearchClientBuilder {
         self.reqwest_builder = self.reqwest_builder.user_agent(ua.as_ref());
         self
     }
+}
 
+impl<S> SearchClientBuilder<S>
+where
+    S: r402::scheme::PaymentSelector + 'static,
+{
     /// Build the [`SearchClient`].
     ///
     /// # Errors
@@ -361,15 +430,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn new_uses_default_url() {
-        let client = SearchClient::new();
-        assert_eq!(
-            client.base_url.as_str().trim_end_matches('/'),
-            DEFAULT_BASE_URL
-        );
-    }
-
-    #[test]
     fn builder_uses_default_url() {
         let client = SearchClient::builder().build().expect("valid");
         assert_eq!(
@@ -392,9 +452,7 @@ mod tests {
 
     #[test]
     fn builder_rejects_invalid_url() {
-        let result = SearchClient::builder()
-            .base_url("not a url ://")
-            .build();
+        let result = SearchClient::builder().base_url("not a url ://").build();
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), Error::Config(_)));
     }
